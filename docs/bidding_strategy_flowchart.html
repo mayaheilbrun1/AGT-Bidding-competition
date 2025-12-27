@@ -1,0 +1,140 @@
+ <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bidding Strategy Decision Tree</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: #1e1e1e;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        h1 {
+            color: #cccccc;
+            margin-bottom: 20px;
+        }
+        .description {
+            color: #cccccc;
+            max-width: 800px;
+            margin-bottom: 30px;
+            text-align: center;
+            line-height: 1.6;
+        }
+        .flowchart-container {
+            background-color: #2d2d2d;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>Team Phase 1 - Bidding Strategy Decision Tree</h1>
+    <div class="description">
+        <p>This flowchart represents the opponent-aware bidding strategy implemented in the <code>bidding_function</code>.</p>
+        <p>The agent first evaluates opponent valuations, then uses comparative value analysis to determine optimal bids based on average budget per round.</p>
+    </div>
+    <div class="flowchart-container">
+        <script type="module">
+            import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+            mermaid.initialize({ 
+                startOnLoad: true,
+                theme: 'dark',
+                themeVariables: {
+                    primaryColor: '#1f1f1f',
+                    primaryTextColor: '#cccccc',
+                    primaryBorderColor: '#454545',
+                    lineColor: '#9d9d9d',
+                    secondaryColor: '#3a3d41',
+                    tertiaryColor: '#2d2d2d',
+                    background: '#1e1e1e',
+                    mainBkg: '#1f1f1f',
+                    secondBkg: '#2d2d2d',
+                    border1: '#454545',
+                    border2: '#454545'
+                },
+                flowchart: {
+                    useMaxWidth: true,
+                    htmlLabels: true,
+                    curve: 'basis'
+                }
+            });
+        </script>
+        <div class="mermaid">
+flowchart TD
+    Start[Item Announced]
+    
+    %% Step 1: Evaluate opponent valuations
+    OpponentEval[Evaluate Opponent Valuations<br/>using base law estimation]
+    
+    %% Step 2: Check if we want the item
+    WantItem{Want Item?<br/>Our value ≥ 3}
+    
+    Bid0[BID 0]
+    
+    %% Step 3: Can we afford it?
+    CanAfford{Can Afford?<br/>Budget ≥ 1}
+    
+    %% Calculate average budget per round
+    CalcAverage[Calculate Average<br/>Budget Per Round<br/>avg = budget / rounds_left]
+    
+    %% Step 4: Classify relative values
+    ValueClassify{Classify Item Value}
+    
+    %% Bidding strategies based on classification
+    HighHigh[HIGH for us & HIGH for opponents<br/>If our_value > opponent_avg:<br/>bid = avg × 1.15<br/>else:<br/>bid = avg]
+    
+    HighLow[HIGH for us & LOW for opponents<br/>bid = avg]
+    
+    LowHigh[LOW for us & HIGH for opponents<br/>bid = avg × 0.85]
+    
+    LowLow[LOW for both<br/>bid = avg × 0.40]
+    
+    %% Final constraints
+    FinalBid[Apply Budget Constraints<br/>& Return Final Bid]
+    
+    %% Flow
+    Start --> OpponentEval
+    OpponentEval --> WantItem
+    WantItem -->|No| Bid0
+    WantItem -->|Yes| CanAfford
+    CanAfford -->|No| Bid0
+    CanAfford -->|Yes| CalcAverage
+    CalcAverage --> ValueClassify
+    
+    ValueClassify -->|High/High| HighHigh
+    ValueClassify -->|High/Low| HighLow
+    ValueClassify -->|Low/High| LowHigh
+    ValueClassify -->|Low/Low| LowLow
+    
+    HighHigh --> FinalBid
+    HighLow --> FinalBid
+    LowHigh --> FinalBid
+    LowLow --> FinalBid
+    
+    FinalBid --> Return[RETURN final bid]
+    
+    style Start fill:#2d5a3d
+    style OpponentEval fill:#3d4d5a
+    style WantItem fill:#5a3d2d
+    style Bid0 fill:#5a2d2d
+    style CanAfford fill:#5a3d2d
+    style CalcAverage fill:#3d4d5a
+    style ValueClassify fill:#5a3d2d
+    style HighHigh fill:#2d5a3d
+    style HighLow fill:#3d5a4d
+    style LowHigh fill:#5a4d2d
+    style LowLow fill:#4d4d2d
+    style FinalBid fill:#3d4d5a
+    style Return fill:#2d5a3d
+        </div>
+    </div>
+</body>
+</html>
+
