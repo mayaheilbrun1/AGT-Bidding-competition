@@ -1,13 +1,20 @@
 """
-Team: Phase 1 - Key Strategic Considerations
-Members: AGT Competition Team
-Strategy: Implements 4 fundamental strategies from STRATEGY_GUIDE.md
+AGT Competition - Student Agent Template
+========================================
+
+Team Name: [YOUR TEAM NAME]
+Members:
+  - [Student 1 Name and ID]
+  - [Student 2 Name and ID]
+  - [Student 3 Name and ID]
+
+Strategy Description:
+[Brief description of your bidding strategy]
 
 Key Features:
-1. Budget Pacing - Allocates budget across rounds, increases aggressiveness over time
-2. Value Classification - Classifies items into HIGH/MEDIUM/LOW tiers with different bid multipliers
-3. Opponent Modeling - Tracks market prices to estimate competitiveness
-4. Information Revelation - Learns from opponent wins and price signals
+- [Feature 1]
+- [Feature 2]
+- [Feature 3]
 """
 
 from typing import Dict, List
@@ -15,23 +22,31 @@ from typing import Dict, List
 
 class BiddingAgent:
     """
-    Baseline agent implementing Key Strategic Considerations:
-    1. Budget Pacing
-    2. Value Classification
-    3. Opponent Modeling
-    4. Information Revelation
+    Your bidding agent for the AGT Auto-Bidding Competition.
+
+    This template provides the required interface and helpful structure.
+    Replace the TODO sections with your own strategy implementation.
     """
-    
+
     def __init__(self, team_id: str, valuation_vector: Dict[str, float],
                  budget: float, opponent_teams: List[str]):
         """
-        Initialize agent at the start of each game.
-        
+        Initialize your agent at the start of each game.
+
         Args:
-            team_id: Your unique team identifier
+            team_id: Your unique team identifier (UUID string)
             valuation_vector: Dict mapping item_id to your valuation
+                Example: {"item_0": 15.3, "item_1": 8.2, ..., "item_19": 12.7}
             budget: Initial budget (always 60)
-            opponent_teams: List of opponent team IDs in the arena
+            opponent_teams: List of opponent team IDs competing in the same arena
+                Example: ["Team_A", "Team_B", "Team_C", "Team_D"]
+                This helps you track and model each opponent's behavior separately
+
+        Important:
+            - This is called once at the start of each game
+            - You can initialize any state variables here
+            - Pre-compute anything that doesn't change during the game
+            - Use opponent_teams to set up per-opponent tracking/modeling
         """
         # Required attributes (DO NOT REMOVE)
         self.team_id = team_id
@@ -41,26 +56,66 @@ class BiddingAgent:
         self.opponent_teams = opponent_teams
         self.utility = 0
         self.items_won = []
-        
+
         # Game state tracking
         self.rounds_completed = 0
         self.total_rounds = 15  # Always 15 rounds per game
-        
-        # Strategy 3 & 4: Opponent modeling and information revelation
-        self.price_history = []  # Track all observed prices
-        self.opponent_wins = {opp: 0 for opp in opponent_teams}  # Count wins per opponent
-        self.opponent_items = {opp: [] for opp in opponent_teams}  # Track items won by each opponent
-        
-        # Strategy 2: Value classification thresholds
-        self.high_value_threshold = 11.0  # Items above this are HIGH value
-        self.low_value_threshold = 5.0    # Items below this are LOW value
-    
-    def _update_available_budget(self, item_id: str, winning_team: str, 
+
+        # ----------------------------
+        # Market learning (global)
+        # ----------------------------
+        # Use EMA instead of simple average: reacts faster to regime changes.
+        self.market_avg = 8.0
+        self.market_beta = 0.2  # EMA smoothing for market
+
+        # Keep history only for debugging/analysis (optional)
+        self.price_history = []
+
+        # ----------------------------
+        # Opponent modeling
+        # ----------------------------
+        # IMPORTANT: We can track opponent remaining budget exactly because:
+        # - Everyone starts with 60
+        # - Only winner pays, and we observe winner + price_paid each round
+        self.opp_budget = {opp: 60.0 for opp in opponent_teams}
+
+        # EMA of price_paid on rounds opponent wins (proxy for aggressiveness)
+        self.opp_mu = {opp: 8.0 for opp in opponent_teams}
+        self.opp_wins = {opp: 0 for opp in opponent_teams}
+        self.alpha = 0.3  # EMA smoothing for opponent win-prices
+
+        # ----------------------------
+        # Item preference tiers (must/want/meh)
+        # ----------------------------
+        items_sorted = sorted(valuation_vector.items(), key=lambda kv: kv[1], reverse=True)
+        self.rank = {it: r for r, (it, _) in enumerate(items_sorted, start=1)}  # 1 = highest
+
+        # ----------------------------
+        # Safety: avoid trusting models too early
+        # ----------------------------
+        self.min_market_obs_for_danger = 3  # wait for a few observations before "danger" logic
+
+        # TODO: Add your custom state variables here
+        # Examples:
+        # self.price_history = []          # Track observed prices
+        # self.opponent_wins = {opp: [] for opp in opponent_teams}  # Track which opponents win what
+        # self.opponent_bids = {opp: [] for opp in opponent_teams}  # Infer opponent bidding patterns
+        # self.beliefs = {opp: {} for opp in opponent_teams}        # Bayesian beliefs per opponent
+        # self.high_value_threshold = 12.0  # Classify items
+        # self.low_value_threshold = 8.0
+
+        # TODO: Pre-compute any strategy parameters
+        # Examples:
+        # self.avg_valuation = sum(valuation_vector.values()) / len(valuation_vector)
+        # self.max_valuation = max(valuation_vector.values())
+        # self.min_valuation = min(valuation_vector.values())
+
+    def _update_available_budget(self, item_id: str, winning_team: str,
                                  price_paid: float):
         """
         Internal method to update budget after auction.
         DO NOT MODIFY - This is called automatically by the system.
-        
+
         Args:
             item_id: ID of the auctioned item
             winning_team: ID of the winning team
@@ -69,168 +124,130 @@ class BiddingAgent:
         if winning_team == self.team_id:
             self.budget -= price_paid
             self.items_won.append(item_id)
-    
+
     def update_after_each_round(self, item_id: str, winning_team: str,
                                 price_paid: float):
         """
         Called after each auction round with public information.
-        Use this to update beliefs, opponent models, and strategy.
-        
+        Use this to update your beliefs, opponent models, and strategy.
+
         Args:
             item_id: The item that was just auctioned
             winning_team: Team ID of the winner (empty string if no winner)
             price_paid: Price the winner paid (second-highest bid)
-        
+
+        What you learn:
+            - Which item was sold
+            - Who won it
+            - What price they paid (second-highest bid)
+
+        What you DON'T learn:
+            - All individual bids
+            - Other teams' valuations
+
         Returns:
-            True if update successful
+            True if update successful (required by system)
         """
-        # System update (DO NOT REMOVE)
+        # System updates (DO NOT REMOVE)
         self._update_available_budget(item_id, winning_team, price_paid)
-        
-        # Update utility if we won
+
         if winning_team == self.team_id:
             self.utility += (self.valuation_vector[item_id] - price_paid)
-        
-        # Strategy 3: Track prices for opponent modeling
-        if price_paid > 0:
-            self.price_history.append(price_paid)
-        
-        # Strategy 4: Track opponent wins for information revelation
-        if winning_team and winning_team != self.team_id:
-            self.opponent_wins[winning_team] += 1
-            self.opponent_items[winning_team].append(item_id)
-        
-        # Update game progress
+
         self.rounds_completed += 1
-        
+        # ----------------------------
+        # Update market EMA
+        # ----------------------------
+        if price_paid and price_paid > 0:
+            self.price_history.append(price_paid)  # keep for analysis (optional)
+            self.market_avg = (1 - self.market_beta) * self.market_avg + self.market_beta * price_paid
+
+        # ----------------------------
+        # Update opponent budgets + aggressiveness EMA
+        # ----------------------------
+        # If winning_team is in opp_budget, it means it's an opponent (not us).
+        # We subtract price_paid from their tracked remaining budget.
+        if winning_team in self.opp_budget and price_paid and price_paid > 0:
+            self.opp_budget[winning_team] -= price_paid
+            self.opp_wins[winning_team] += 1
+            self.opp_mu[winning_team] = (1 - self.alpha) * self.opp_mu[winning_team] + self.alpha * price_paid
+
+        # TODO: Implement your learning/adaptation logic here
         return True
-    
+
     def bidding_function(self, item_id: str) -> float:
-        """
-        Main bidding strategy following decision tree structure.
-        
-        Args:
-            item_id: The item being auctioned
-        
-        Returns:
-            float: Your bid amount (>= 0, <= budget)
-        """
-        my_valuation = self.valuation_vector.get(item_id, 0)
+        my_valuation = float(self.valuation_vector.get(item_id, 0.0))
+        if my_valuation <= 0 or self.budget <= 0:
+            return 0.0
+
         rounds_remaining = self.total_rounds - self.rounds_completed
-        
-        # ===== STEP 1: WANT ITEM? =====
-        # Check if item has sufficient value
-        if my_valuation < 3.0:
-            return 0.0  # BID 0 - not worth it
-        
-        # ===== STEP 2: CAN AFFORD? =====
-        # Check if we have meaningful budget left
-        if self.budget < 1.0:
-            return 0.0  # BID 0 - can't afford anything meaningful
-        
-        # ===== STEP 3: BUDGET MANAGER - Calculate allocation =====
-        if rounds_remaining > 0:
-            budget_per_round = self.budget / rounds_remaining
+        if rounds_remaining <= 0:
+            return 0.0
+
+        # ----------------------------
+        # 1) Preference tier by rank
+        # ----------------------------
+        r = self.rank.get(item_id, 1000)
+        if r <= 3:
+            want = "must"
+        elif r <= 7:
+            want = "want"
         else:
-            budget_per_round = self.budget
-        
-        # ===== STEP 4: VALUE CLASSIFIER - Classify item tier =====
-        if my_valuation > self.high_value_threshold:
-            value_tier = "HIGH"
-        elif my_valuation < self.low_value_threshold:
-            value_tier = "LOW"
-        else:
-            value_tier = "MEDIUM"
-        
-        # ===== STEP 5: OPPONENT TRACKER - Estimate competition =====
-        if len(self.price_history) > 0:
-            avg_market_price = sum(self.price_history) / len(self.price_history)
-        else:
-            avg_market_price = 0.0
-        
-        # ===== STEP 6: ITEM CLASSIFIER - Bayesian category estimation =====
-        # (Using valuation distribution to infer item desirability)
-        # Items with high valuation likely have high competition
-        competition_signal = my_valuation / 15.0  # Normalize (max val ~15)
-        
-        # ===== STEP 7: BUDGET TRACKER - Check opponent budgets =====
-        total_opponent_wins = sum(self.opponent_wins.values())
-        opponent_activity = total_opponent_wins / max(1, self.rounds_completed)
-        
-        # ===== STEP 8: EXPLORE MODE? =====
-        # Check if we should explore (low-value item in early game)
-        is_early_game = self.rounds_completed < 5
-        is_low_value = value_tier == "LOW"
-        explore_mode = is_early_game and is_low_value
-        
-        if explore_mode:
-            # Exploratory bid - test market with small bid
-            bid = my_valuation * 0.40
-        else:
-            # ===== STEP 9: COMPETITION LEVEL =====
-            # Determine competition level based on market signals
-            if avg_market_price > 6.0:
-                competition_level = "HIGH"
-            elif avg_market_price > 3.0:
-                competition_level = "MEDIUM"
-            else:
-                competition_level = "LOW"
-            
-            # Apply bidding strategy based on competition level
-            if competition_level == "HIGH":
-                # High competition: bid valuation * 0.75 or fold
-                if value_tier == "LOW":
-                    return 0.0  # Fold on low-value items in high competition
-                bid = my_valuation * 0.75
-            elif competition_level == "MEDIUM":
-                # Medium competition: bid valuation * 0.80
-                bid = my_valuation * 0.80
-            else:  # LOW competition
-                # Low competition: bid valuation * 0.60
-                bid = my_valuation * 0.60
-        
-        # ===== STEP 10: GAME PHASE ADJUSTMENT =====
-        # Adjust aggressiveness based on game progress
-        progress = self.rounds_completed / self.total_rounds
-        
-        if progress < 0.33:  # Early game (rounds 0-5)
-            phase_multiplier = 0.85
-        elif progress < 0.67:  # Mid game (rounds 6-10)
-            phase_multiplier = 1.0
-        else:  # Late game (rounds 11-15)
-            phase_multiplier = 1.15
-        
-        bid = bid * phase_multiplier
-        
-        # ===== STEP 11: REGRET ADJUSTMENT =====
-        # Check if we're missing opportunities (losing too many items we valued)
-        my_wins = len(self.items_won)
-        win_rate = my_wins / max(1, self.rounds_completed)
-        
-        # If we're winning less than 20% and have budget, increase aggressiveness
-        missing_opportunities = win_rate < 0.20 and self.budget > budget_per_round * 3
-        
-        if missing_opportunities:
-            # Increase bid by 10-15%
-            regret_multiplier = 1.10 + (0.05 * (1 - win_rate))  # 1.10 to 1.15
-            bid = bid * regret_multiplier
-        # else: No adjustment
-        
-        # ===== STEP 12: APPLY BUDGET CONSTRAINTS =====
-        # Don't overspend early - limit to 2.5x budget per round in early game
-        if rounds_remaining > 5:
-            max_bid_now = budget_per_round * 2.5
-            bid = min(bid, max_bid_now)
-        
-        # Never bid more than valuation (would create negative utility)
-        bid = min(bid, my_valuation)
-        
-        # Never bid more than remaining budget
-        bid = min(bid, self.budget)
-        
-        # Never bid negative
-        bid = max(0.0, bid)
-        
-        # ===== STEP 13: RETURN FINAL BID =====
-        return round(bid, 2)
+            want = "meh"
+
+        # ----------------------------
+        # 2) Truthful baseline
+        # ----------------------------
+        # Start from truthful bidding (second-price optimal baseline)
+        bid_wanted = my_valuation
+
+        # Optional *tiny* shading only to reduce accidental overspending early
+        # (still "almost truthful")
+        if want == "want":
+            bid_wanted *= 0.97
+        elif want == "meh":
+            bid_wanted *= 0.90
+
+        # ----------------------------
+        # 3) End-game: spend remaining budget more aggressively
+        # ----------------------------
+        if rounds_remaining <= 3:
+            # basically truthful, but avoid leaving budget unused
+            bid_wanted = min(my_valuation, max(bid_wanted, 0.80 * self.budget))
+
+        # ----------------------------
+        # 4) Danger detection (only used to decide if we should "skip meh")
+        # ----------------------------
+        danger = False
+        market = max(1e-6, float(self.market_avg))
+
+        if len(self.price_history) >= self.min_market_obs_for_danger:
+            for opp in self.opponent_teams:
+                if self.opp_wins.get(opp, 0) == 0:
+                    continue
+
+                aggr = self.opp_mu[opp] / market
+                opp_can_fight = self.opp_budget[opp] > max(market, 0.9 * my_valuation)
+
+                if aggr > 1.2 and opp_can_fight:
+                    danger = True
+                    break
+
+        # Reaction: DO NOT distort must items much (stay truthful).
+        if danger and want == "meh":
+            # If it's not important, don't waste budget fighting aggressive opponents.
+            bid_wanted = 0.0
+
+        # ----------------------------
+        # 5) Very light pacing cap (only early, only for want/meh)
+        # ----------------------------
+        # Keep must items truthful; only prevent wasting budget early on non-must.
+        if want != "must" and self.rounds_completed < 6:
+            budget_per_round = self.budget / max(1, rounds_remaining)
+            pacing_cap = min(self.budget, 2.0 * budget_per_round)  # light cap
+            bid_wanted = min(bid_wanted, pacing_cap)
+
+        # Final validity
+        bid = max(0.0, min(bid_wanted, self.budget))
+        return float(bid)
 

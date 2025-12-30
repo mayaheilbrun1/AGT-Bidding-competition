@@ -232,8 +232,7 @@ class BiddingAgent:
 
         # Calculate rounds remaining
         rounds_remaining = self.total_rounds - self.rounds_completed
-        if rounds_remaining <= 0:
-            return 0.0
+        if rounds_remaining > 0:
             # ----------------------------
             # 1) Preference tier (must/want/meh) based on our valuation rank
             # ----------------------------
