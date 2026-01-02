@@ -19,6 +19,14 @@ Key Features:
 
 from typing import Dict, List
 
+from enum import Enum
+
+
+class WantLevel(Enum):
+    MUST = 1
+    WANT = 2
+    MEH = 3
+
 
 class BiddingAgent:
     """
@@ -61,54 +69,20 @@ class BiddingAgent:
         self.rounds_completed = 0
         self.total_rounds = 15  # Always 15 rounds per game
 
-        # ----------------------------
-        # Market learning (global)
-        # ----------------------------
-        # Use EMA instead of simple average: reacts faster to regime changes.
-        self.market_avg = 8.0
-        self.market_beta = 0.2  # EMA smoothing for market
+        self.price_average = 9.0  # early assumption for price average
 
-        # Keep history only for debugging/analysis (optional)
+        # Keep history only for debugging/analysis
         self.price_history = []
 
-        # ----------------------------
         # Opponent modeling
-        # ----------------------------
-        # IMPORTANT: We can track opponent remaining budget exactly because:
-        # - Everyone starts with 60
-        # - Only winner pays, and we observe winner + price_paid each round
         self.opp_budget = {opp: 60.0 for opp in opponent_teams}
-
-        # EMA of price_paid on rounds opponent wins (proxy for aggressiveness)
-        self.opp_mu = {opp: 8.0 for opp in opponent_teams}
+        self.opp_mu = {opp: 9.0 for opp in opponent_teams}
         self.opp_wins = {opp: 0 for opp in opponent_teams}
-        self.alpha = 0.3  # EMA smoothing for opponent win-prices
+        self.alpha = 0.2  # Needed for computing EMA
 
-        # ----------------------------
-        # Item preference tiers (must/want/meh)
-        # ----------------------------
-        items_sorted = sorted(valuation_vector.items(), key=lambda kv: kv[1], reverse=True)
-        self.rank = {it: r for r, (it, _) in enumerate(items_sorted, start=1)}  # 1 = highest
-
-        # ----------------------------
-        # Safety: avoid trusting models too early
-        # ----------------------------
-        self.min_market_obs_for_danger = 3  # wait for a few observations before "danger" logic
-
-        # TODO: Add your custom state variables here
-        # Examples:
-        # self.price_history = []          # Track observed prices
-        # self.opponent_wins = {opp: [] for opp in opponent_teams}  # Track which opponents win what
-        # self.opponent_bids = {opp: [] for opp in opponent_teams}  # Infer opponent bidding patterns
-        # self.beliefs = {opp: {} for opp in opponent_teams}        # Bayesian beliefs per opponent
-        # self.high_value_threshold = 12.0  # Classify items
-        # self.low_value_threshold = 8.0
-
-        # TODO: Pre-compute any strategy parameters
-        # Examples:
-        # self.avg_valuation = sum(valuation_vector.values()) / len(valuation_vector)
-        # self.max_valuation = max(valuation_vector.values())
-        # self.min_valuation = min(valuation_vector.values())
+        # classify items by preference
+        items_sorted = sorted(valuation_vector, key=valuation_vector.get, reverse=True)
+        self.items_rank = {item: rank for rank, item in enumerate(items_sorted, start=1)}
 
     def _update_available_budget(self, item_id: str, winning_team: str,
                                  price_paid: float):
@@ -155,24 +129,17 @@ class BiddingAgent:
             self.utility += (self.valuation_vector[item_id] - price_paid)
 
         self.rounds_completed += 1
-        # ----------------------------
-        # Update market EMA
-        # ----------------------------
+        # Update market EMA, when we are giving higher weight to the last games
         if price_paid and price_paid > 0:
-            self.price_history.append(price_paid)  # keep for analysis (optional)
-            self.market_avg = (1 - self.market_beta) * self.market_avg + self.market_beta * price_paid
+            self.price_history.append(price_paid)
+            self.price_average = (1 - self.alpha) * self.price_average + self.alpha * price_paid
 
-        # ----------------------------
-        # Update opponent budgets + aggressiveness EMA
-        # ----------------------------
-        # If winning_team is in opp_budget, it means it's an opponent (not us).
-        # We subtract price_paid from their tracked remaining budget.
-        if winning_team in self.opp_budget and price_paid and price_paid > 0:
+        # Subtract price_paid from op's tracked remaining budget.
+        if winning_team in self.opp_mu and price_paid and price_paid > 0:
             self.opp_budget[winning_team] -= price_paid
             self.opp_wins[winning_team] += 1
             self.opp_mu[winning_team] = (1 - self.alpha) * self.opp_mu[winning_team] + self.alpha * price_paid
 
-        # TODO: Implement your learning/adaptation logic here
         return True
 
     def bidding_function(self, item_id: str) -> float:
@@ -184,70 +151,55 @@ class BiddingAgent:
         if rounds_remaining <= 0:
             return 0.0
 
-        # ----------------------------
-        # 1) Preference tier by rank
-        # ----------------------------
-        r = self.rank.get(item_id, 1000)
-        if r <= 3:
-            want = "must"
-        elif r <= 7:
-            want = "want"
+        # classify how much do we want this item
+        rank = self.items_rank[item_id]
+        if rank <= 5:
+            want = WantLevel.MUST
+        elif rank <= 10:
+            want = WantLevel.WANT
         else:
-            want = "meh"
+            want = WantLevel.MEH
 
-        # ----------------------------
-        # 2) Truthful baseline
-        # ----------------------------
-        # Start from truthful bidding (second-price optimal baseline)
-        bid_wanted = my_valuation
+        # Truthful baseline
+        suggested_bid = my_valuation
 
-        # Optional *tiny* shading only to reduce accidental overspending early
-        # (still "almost truthful")
-        if want == "want":
-            bid_wanted *= 0.97
-        elif want == "meh":
-            bid_wanted *= 0.90
+        # Adjust suggested bid according to want level, when we want to stay truthful as we can
+        if want == WantLevel.WANT:
+            suggested_bid *= 0.9
+        elif want == WantLevel.MEH:
+            suggested_bid *= 0.8
 
-        # ----------------------------
-        # 3) End-game: spend remaining budget more aggressively
-        # ----------------------------
-        if rounds_remaining <= 3:
-            # basically truthful, but avoid leaving budget unused
-            bid_wanted = min(my_valuation, max(bid_wanted, 0.80 * self.budget))
+        # At the end of the game, spend remaining budget more aggressively
+        end_of_game = rounds_remaining <= 2
+        if end_of_game:
+            suggested_bid = min(my_valuation, max(suggested_bid, 0.80 * self.budget))
 
-        # ----------------------------
-        # 4) Danger detection (only used to decide if we should "skip meh")
-        # ----------------------------
-        danger = False
-        market = max(1e-6, float(self.market_avg))
+        # Danger detection - aggressive op exists
+        agg_opp_exists = False
 
-        if len(self.price_history) >= self.min_market_obs_for_danger:
+        if len(self.price_history) >= 4:
             for opp in self.opponent_teams:
-                if self.opp_wins.get(opp, 0) == 0:
-                    continue
+                if self.opp_wins.get(opp, 0) > 0:
+                    aggr = self.opp_mu[opp] / self.price_average  # compute how much the opp exceeded the average
+                    opp_can_fight = (self.opp_budget[opp] > my_valuation * 0.9)  # opp can win in this round
 
-                aggr = self.opp_mu[opp] / market
-                opp_can_fight = self.opp_budget[opp] > max(market, 0.9 * my_valuation)
+                    if aggr > 1.2 and opp_can_fight:
+                        agg_opp_exists = True
+                        break
 
-                if aggr > 1.2 and opp_can_fight:
-                    danger = True
-                    break
+        # avoid fighting aggressive opponents on low-priority items,
+        # but still place a small bid to possibly win cheap or raise their price
+        if agg_opp_exists and want == WantLevel.MEH and not end_of_game:
+            suggested_bid = 0.3 * my_valuation
 
-        # Reaction: DO NOT distort must items much (stay truthful).
-        if danger and want == "meh":
-            # If it's not important, don't waste budget fighting aggressive opponents.
-            bid_wanted = 0.0
+        # Keep must items truthful; only prevent wasting budget early on non-must
+        if want != WantLevel.MUST and self.rounds_completed < 6:
+            # Estimate how much budget we can "afford" per remaining round
+            budget_per_round = self.budget / rounds_remaining
+            # Avoid spending too much early on non-critical items
+            pacing_cap = min(self.budget, 2.0 * budget_per_round)
+            # Apply the pacing cap (only if our bid is too high)
+            suggested_bid = min(suggested_bid, pacing_cap)
 
-        # ----------------------------
-        # 5) Very light pacing cap (only early, only for want/meh)
-        # ----------------------------
-        # Keep must items truthful; only prevent wasting budget early on non-must.
-        if want != "must" and self.rounds_completed < 6:
-            budget_per_round = self.budget / max(1, rounds_remaining)
-            pacing_cap = min(self.budget, 2.0 * budget_per_round)  # light cap
-            bid_wanted = min(bid_wanted, pacing_cap)
-
-        # Final validity
-        bid = max(0.0, min(bid_wanted, self.budget))
+        bid = max(0.0, min(suggested_bid, self.budget))
         return float(bid)
-
